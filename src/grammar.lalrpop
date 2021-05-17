@@ -1,0 +1,468 @@
+
+use crate::ast::*;
+use std::str::FromStr;
+
+grammar;
+
+// TODO
+// EscapeSequence: String = {
+//     r#"\*0"# => char::from(0x00).into(),
+//     // TODO
+//     // r#"\*e"# end-of-file
+//     r#"\*\("# => "{".into(),
+//     r#"\*\)"# => "}".into(),
+//     r#"\*t"# => "\t".into(),
+//     r#"\*\*"# => '*'.into(),
+//     r#"\*’"# => '’'.into(),
+//     r#"\*""# => '"'.into(),
+//     r#"\*n"# => "\n".into(),
+// };
+pub File: Vec<Statement> = {
+    <mut this:File> <next:GlobalStatement> => {
+        this.push(next);
+        return this;
+    },
+    GlobalStatement => vec![<>],
+
+}
+
+GlobalStatement: Statement = {
+    FunctionDefinition,
+    GlobalDefinition,
+}
+
+GlobalDefinition: Statement = {
+    <ident:Ident> <initial_value:Constant> ";" => Statement::GlobalDefinition{ <> },
+}
+
+Comment: () = {
+    r"/\*.*\*/" => (),
+}
+
+Ident: Identifier = {
+    r"[_a-zA-Z][_a-zA-Z0-9]{0,30}" =>
+        Identifier::Name(<>.into()),
+}
+
+IntConstant: i64 = {
+    r"\d*" => i64::from_str(<>).unwrap(),
+}
+
+Constant: Const = {
+    IntConstant => Const::Integer(<>),
+    r#"".*""# => Const::String(<>.into()),
+}
+
+CompoundStatement: Statement = "{" <Stmt*> "}" => Statement::Compound(<>);
+
+VariableScope: VariableScope = {
+    "extrn" => VariableScope::Extern,
+    "auto" => VariableScope::Local,
+}
+
+IdentifierDefinition: Identifier = {
+    Ident,
+    <ident:r"[_a-zA-Z][_a-zA-Z0-9]{0,30}"> "[" <c:IntConstant> "]" =>
+        Identifier::Vector(ident.into(), c),
+}
+
+IdentDefs: Vec<Identifier> = {
+    <mut this:IdentDefs> "," <next:IdentifierDefinition> => {
+        this.push(next);
+        return this;
+    },
+    IdentifierDefinition => vec![<>],
+}
+
+VariableDefinition: Statement = {
+    <scope:VariableScope> <idents:IdentDefs> ";" => 
+        Statement::Declaration {
+            scope, idents,
+        },
+}
+
+
+ElseStatement: Statement = {
+    "else" <CompoundStatement>,
+}
+
+ConditionalStatement: Statement = {
+    "if" "(" <condition:Expr> ")" <body:CompoundStatement> <e:ElseStatement?> =>
+        Statement::Conditional {
+            condition, body: Box::new(body), e: e.map(Box::new),
+        }
+    }
+
+LoopStatement: Statement = {
+    "while" "(" <condition:Expr> ")" <body:Stmt> => 
+        Statement::Loop {
+            condition, body: Box::new(body),
+        }
+}
+
+CaseBody: Vec<Statement> = {
+    <mut this:CaseBody> <next:Stmt> => {
+        this.push(next);
+        return this;
+    },
+    Stmt => vec![<>],
+}
+
+Case: CaseStatement = {
+    "case" <case:Constant> ":" <body:CaseBody?> => 
+        CaseStatement { case, body }
+}
+Cases: Vec<CaseStatement> = {
+    Case => vec![<>],
+    <mut this:Cases> <next:Case> => {
+        this.push(next);
+        return this;
+    },
+}
+
+SwitchExpression: Expression = {
+    "switch" "(" <e:Expr> ")" => <>
+};
+
+// TODO: Default
+SwitchStatement: Statement = {
+    <switching_on:SwitchExpression> "{" <cases:Cases> "}" => 
+        Statement::Switch {
+            switching_on,
+            cases
+        },
+    
+}
+
+LabelStatement: Statement = {
+    <Ident> ":" => Statement::Label(<>),
+}
+GotoStatement: Statement = {
+    "goto" <Ident> ";" => Statement::Goto(<>),
+}
+
+
+FunctionDefinitionArgs: Vec<Identifier> = {
+    <mut this:FunctionDefinitionArgs> "," <next:Ident> => {
+        this.push(next);
+        return this;
+    },
+    Ident => vec![<>],
+}
+
+FunctionDefinition: Statement = {
+    <ident:Ident> "(" <args:FunctionDefinitionArgs?> ")" <body:Stmt> =>
+        Statement::FunctionDefinition {
+            ident,
+            args: args.unwrap_or(vec![]),
+            body: Box::new(body)
+        },
+}
+
+Stmt: Statement = {
+    CompoundStatement,
+    
+    "return" <Expr> ";"  =>
+        Statement::Return(<>),
+    
+    <Expr> ";" =>
+        Statement::Expression(<>),
+
+    VariableDefinition,
+
+    ConditionalStatement,
+
+    LoopStatement,
+
+    SwitchStatement,
+
+    LabelStatement,
+
+    GotoStatement,
+    
+    "break" ";" => Statement::Break,
+}
+
+Expr: Expression = {
+    <l:Precedence14> "=" <r:Expr> => 
+        Expression::Assign {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence14> "=|" <r:Expr> => 
+        Expression::AssignOr {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence14> "=^" <r:Expr> => 
+        Expression::AssignXor {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence14> "=&" <r:Expr> => 
+        Expression::AssignAnd {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence14> "=<<" <r:Expr> => 
+        Expression::AssignShiftLeft {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence14> "=>>" <r:Expr> => 
+        Expression::AssignShiftRight {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence14> "=+" <r:Expr> => 
+        Expression::AssignAdd {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence14> "=-" <r:Expr> => 
+        Expression::AssignSubtract {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence14> "=*" <r:Expr> => 
+        Expression::AssignMultiply {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence14> "=/" <r:Expr> => 
+        Expression::AssignDivide {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence14> "=%" <r:Expr> => 
+        Expression::AssignModulo {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    Precedence14,
+}
+
+Precedence14: Expression = {
+    <c:Precedence14> "?" <l:Precedence13> ":" <r:Precedence13> => 
+        Expression::Ternary {
+            condition: Box::new(c),
+            yes: Box::new(l),
+            no: Box::new(r),
+        },
+        
+    Precedence13,
+}
+
+Precedence13: Expression = {
+    Precedence12,
+}
+
+Precedence12: Expression = {
+    Precedence11,
+}
+
+Precedence11: Expression = {
+    <l:Precedence11> "==" <r:Precedence10> => 
+        Expression::Equal {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence11> "!=" <r:Precedence10> => 
+        Expression::NotEqual {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    Precedence10,
+}
+
+Precedence10: Expression = {
+    <l:Precedence10> "<" <r:Precedence9> => 
+        Expression::Less {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence10> ">" <r:Precedence9> => 
+        Expression::More {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence10> "<=" <r:Precedence9> => 
+        Expression::LessEqual {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence10> ">=" <r:Precedence9> => 
+        Expression::MoreEqual {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    Precedence9,
+}
+
+Precedence9: Expression = {
+    <l:Precedence9> "|" <r:Precedence8> => 
+        Expression::Or {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    Precedence8,
+}
+
+Precedence8: Expression = {
+    <l:Precedence8> "^" <r:Precedence7> => 
+        Expression::Xor {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    Precedence7,
+}
+
+Precedence7: Expression = {
+    <l:Precedence7> "&" <r:Precedence6> => 
+        Expression::And {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    Precedence6,
+}
+
+Precedence6: Expression = {
+    <l:Precedence6> "<<" <r:Precedence5> => 
+        Expression::ShiftLeft {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence6> ">>" <r:Precedence5> => 
+        Expression::ShiftRight {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    Precedence5,
+}
+
+Precedence5: Expression = {
+    <l:Precedence5> "+" <r:Precedence4> => 
+        Expression::Add {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence5> "-" <r:Precedence4> => 
+        Expression::Subtract {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    Precedence4,
+}
+
+Precedence4: Expression = {
+    <l:Precedence4> "*" <r:Precedence3> => 
+        Expression::Multiply {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence4> "/" <r:Precedence3> => 
+        Expression::Divide {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    <l:Precedence4> "%" <r:Precedence3> => 
+        Expression::Modulo {
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        },
+        
+    Precedence3,
+}
+
+Precedence3: Expression = {
+    Precedence2,
+}
+
+Precedence2: Expression = {
+    "!" <e:Precedence2> => 
+        Expression::Not { rhs: Box::new(e) },
+        
+    "~" <e:Precedence2> => 
+        Expression::Complement { rhs: Box::new(e) },
+        
+    "++" <e:Precedence2> => 
+        Expression::PreIncrement { rhs: Box::new(e) },
+        
+    "--" <e:Precedence2> => 
+        Expression::PreDecrement { rhs: Box::new(e) },
+        
+    "+" <e:Precedence2> => 
+        Expression::UnaryPlus { rhs: Box::new(e) },
+        
+    "-" <e:Precedence2> => 
+        Expression::UnaryMinus { rhs: Box::new(e) },
+        
+    Precedence0,
+}
+Precedence0: Expression = {
+    <e:Precedence0> "++" => 
+        Expression::PostIncrement {
+            lhs: Box::new(e),
+        },
+        
+    <e:Precedence0> "--" => 
+        Expression::PostDecrement {
+            lhs: Box::new(e),
+        },
+        
+    <FunctionCall> => <>,
+
+    <e:Precedence0> "[" <i:Expr> "]" => 
+        Expression::VectorIndex {
+            vector: Box::new(e),
+            index: Box::new(i),
+        },
+        
+    Constant => 
+        Expression::Constant(<>),
+        
+    Ident => 
+        Expression::Identifier(<>),
+
+    "(" <e:Expr> ")" => e,
+}
+
+FunctionCallArgs: Vec<Box<Expression>> = {
+    <mut this:FunctionCallArgs> "," <next:Expr> => {
+        this.push(Box::new(next));
+        return this;
+    },
+
+    Expr => vec![Box::new(<>)],
+}
+
+FunctionCall: Expression = {
+    <ident:Ident> "(" <args:FunctionCallArgs> ")" => 
+        Expression::FunctionCall { ident, args, },
+}
