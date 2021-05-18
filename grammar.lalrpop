@@ -48,9 +48,22 @@ IntConstant: i64 = {
     r"\d*" => i64::from_str(<>).unwrap(),
 }
 
+VectorItems: Vec<Box<Expression>> = {
+    <mut this:VectorItems> "," <next:Expr> => {
+        this.push(Box::new(next));
+        return this;
+    },
+    Expr => vec![Box::new(<>)]
+}
+
+VectorConstant: Vec<Box<Expression>> = {
+    "[" <VectorItems> "]" => <>
+}
+
 Constant: Const = {
     IntConstant => Const::Integer(<>),
     r#"".*""# => Const::String(<>.into()),
+    VectorConstant => Const::Vector(<>),
 }
 
 CompoundStatement: Statement = "{" <Stmt*> "}" => Statement::Compound(<>);
@@ -183,7 +196,7 @@ Stmt: Statement = {
     "break" ";" => Statement::Break,
 }
 
-Expr: Expression = {
+pub Expr: Expression = {
     <l:Precedence14> "=" <r:Expr> => 
         Expression::Assign {
             lhs: Box::new(l),

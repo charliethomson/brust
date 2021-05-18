@@ -1,34 +1,21 @@
-use lalrpop_util::lexer::Token;
+use interpreter::Interpreter;
+use lalrpop_util::lalrpop_mod;
+use std::io::{stdin, stdout};
+use std::io::{Read, Write};
 
-#[macro_use]
-extern crate lalrpop_util;
 pub mod ast;
-mod grammar;
+
+lalrpop_mod!(pub grammar);
+
 pub mod interpreter;
 
 pub type Parser = grammar::FileParser;
 fn main() {
-    let s = r#"
-    main() {
-        while (i--) {
-            j = f(i);
-            switch (j) {
-                case 1:
-                    x = 5;
-                    break;
-                case 2:
-                case 3:
-                    x = g(j);
-            }
-        labl:
-            if( j < 0 ) {
-                xy = 3;
-                break;
-            }
-            xy = j/2;
-        }
-        return xy;
-    }
-    "#;
-    println!("{:#?}", Parser::new().parse(s));
+    let mut buffer = String::new();
+    stdout().write(b"Enter the name of the test you'd like to run (holly, fib): ").unwrap();
+    stdout().flush().unwrap();
+    stdin().read_line(&mut buffer);
+    println!();
+
+    Interpreter::new().interpret(format!("examples/{}.b", buffer.trim()));
 }

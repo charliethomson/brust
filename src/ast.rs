@@ -1,22 +1,153 @@
-#[derive(Debug)]
+use std::{
+    fmt::{Display, Formatter},
+    ops::BitAnd,
+};
+
+#[derive(Debug, Clone)]
 pub enum VariableScope {
     Extern,
     Local,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Hash, Eq, Clone, PartialOrd)]
 pub enum Identifier {
     Name(String),
     Vector(String, i64),
 }
+impl Display for Identifier {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Name(n) => n,
+                Self::Vector(n, _) => n,
+            }
+        )
+    }
+}
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Const {
     Integer(i64),
     String(String),
+    Vector(Vec<Box<Expression>>),
+    Ident(Identifier),
 }
+impl Const {
+    pub fn truthy(&self) -> bool {
+        match self {
+            Self::Integer(i) => *i != 0,
+            Self::String(s) => s.len() != 0,
+            Self::Vector(v) => v.len() != 0,
+            _ => true,
+        }
+    }
 
-#[derive(Debug)]
+    pub fn and(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => Self::Integer(lhs & rhs),
+            (lhs, rhs) => Self::Integer((lhs.truthy() && rhs.truthy()) as i64),
+        }
+    }
+    pub fn or(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => Self::Integer(lhs | rhs),
+            (lhs, rhs) => Self::Integer((lhs.truthy() || rhs.truthy()) as i64),
+        }
+    }
+    pub fn xor(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => Self::Integer(lhs ^ rhs),
+            (lhs, rhs) => Self::Integer((lhs.truthy() ^ rhs.truthy()) as i64),
+        }
+    }
+    pub fn shr(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => Self::Integer(lhs >> rhs),
+            (lhs, rhs) => Self::Integer(lhs.truthy() as i64 >> rhs.truthy() as i64),
+        }
+    }
+    pub fn shl(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => Self::Integer(lhs << rhs),
+            (lhs, rhs) => Self::Integer((lhs.truthy() as i64) << (rhs.truthy() as i64)),
+        }
+    }
+    pub fn add(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => Self::Integer(lhs + rhs),
+            (lhs, rhs) => Self::Integer((lhs.truthy() as i64) + (rhs.truthy() as i64)),
+        }
+    }
+    pub fn sub(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => Self::Integer(lhs - rhs),
+            (lhs, rhs) => Self::Integer((lhs.truthy() as i64) - (rhs.truthy() as i64)),
+        }
+    }
+    pub fn mul(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => Self::Integer(lhs * rhs),
+            (lhs, _) => Self::Integer(lhs.truthy() as i64),
+        }
+    }
+    pub fn div(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => Self::Integer(lhs / rhs),
+            (lhs, _) => Self::Integer(lhs.truthy() as i64),
+        }
+    }
+    pub fn modulo(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Integer(lhs), Self::Integer(rhs)) => Self::Integer(lhs % rhs),
+            (lhs, rhs) => Self::Integer((lhs.truthy() as i64) % (rhs.truthy() as i64)),
+        }
+    }
+    pub fn complement(&self) -> Self {
+        match self {
+            Self::Integer(i) => Self::Integer(!i),
+            i => Self::Integer(!i.truthy() as i64),
+        }
+    }
+    pub fn negate(&self) -> Self {
+        match self {
+            Self::Integer(i) => Self::Integer(-i),
+            i => Self::Integer(-(i.truthy() as i64)),
+        }
+    }
+    pub fn inc(&self) -> Self {
+        match self {
+            Self::Integer(i) => Self::Integer(i + 1),
+            i => Self::Integer(i.truthy() as i64 + 1),
+        }
+    }
+    pub fn dec(&self) -> Self {
+        match self {
+            Self::Integer(i) => Self::Integer(i - 1),
+            i => Self::Integer(i.truthy() as i64 - 1),
+        }
+    }
+    pub fn index(&self, idx: Const) -> Box<Expression> {
+        match (self, idx) {
+            (Self::Vector(v), Self::Integer(i)) => {
+                v.get(i as usize).expect("Index out of bounds").clone()
+            }
+            (Self::Vector(_), _) => panic!("Attempt to index with non integer index"),
+            _ => panic!("Attempt to index a non vector object"),
+        }
+    }
+}
+impl Display for Const {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            Self::Integer(i) => write!(f, "{}", i),
+            Self::String(s) => write!(f, "{}", s.trim_matches('"')),
+            _ => write!(f, ""),
+        }
+    }
+}
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
 pub enum Expression {
     Assign {
         lhs: Box<Expression>,
@@ -166,14 +297,28 @@ pub enum Expression {
         args: Vec<Box<Expression>>,
     },
 }
+impl Expression {
+    pub fn expect_const(&self) -> Option<Const> {
+        match self {
+            Self::Constant(c) => Some(c.clone()),
+            _ => None,
+        }
+    }
+    pub fn expect_ident(&self) -> Option<Identifier> {
+        match self {
+            Self::Identifier(i) => Some(i.clone()),
+            _ => None,
+        }
+    }
+}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CaseStatement {
     pub case: Const,
     pub body: Option<Vec<Statement>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Statement {
     Compound(Vec<Statement>),
     Return(Expression),
