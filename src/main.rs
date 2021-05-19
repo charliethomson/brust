@@ -21,3 +21,7 @@ fn main() {
 
     Interpreter::new().interpret(format!("examples/{}.b", buffer.trim()));
 }
+
+fn interpret_string(s: String) -> i64 {
+    Interpreter::new().interpret_string(s)
+}

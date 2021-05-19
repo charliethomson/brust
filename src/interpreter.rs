@@ -177,6 +177,12 @@ impl Interpreter {
     //TODO
     pub fn add_extern(&mut self, ident: &Identifier) {}
 
+    pub fn call_main(&mut self) -> Const {
+        self.call_function(&Identifier::Name("main".into()), vec![])
+            .expect_const()
+            .unwrap()
+    }
+
     pub fn call_function(
         &mut self,
         ident: &Identifier,
@@ -236,12 +242,12 @@ impl Interpreter {
         let lhs = self
             .eval_expr(Box::leak(lhs).clone())
             .expect_const()
-            .unwrap_or_else(|| panic!("need consts"));
+            .unwrap_or_else(|| panic!("Binary operation lhs non const value"));
 
         let rhs = self
             .eval_expr(Box::leak(rhs).clone())
             .expect_const()
-            .unwrap_or_else(|| panic!("need consts"));
+            .unwrap_or_else(|| panic!("Binary operation rhs non const value"));
 
         Expression::Constant(operation_function(&lhs, &rhs))
     }
@@ -254,7 +260,7 @@ impl Interpreter {
         let rhs = self
             .eval_expr(Box::leak(rhs).clone())
             .expect_const()
-            .unwrap_or_else(|| panic!("need consts"));
+            .unwrap_or_else(|| panic!("Cannot operate on non const value"));
 
         Expression::Constant(operation_function(&rhs))
     }
@@ -275,7 +281,12 @@ impl Interpreter {
         }
     }
 
-    fn assign_and(&mut self, lhs: Box<Expression>, rhs: Box<Expression>, constructor: fn(Box<Expression>, Box<Expression>) -> Expression) -> Expression {
+    fn assign_and(
+        &mut self,
+        lhs: Box<Expression>,
+        rhs: Box<Expression>,
+        constructor: fn(Box<Expression>, Box<Expression>) -> Expression,
+    ) -> Expression {
         match Box::leak(lhs) {
             Expression::Identifier(ident) => {
                 let value = self.eval_expr(Box::leak(rhs).clone());
@@ -290,8 +301,22 @@ impl Interpreter {
                 self.add_var(ident, Some(&value));
                 return value;
             }
-            _ => panic!("assign lhs not ident"),
+            _ => panic!("Cannot assign to non ident"),
         }
+    }
+
+    fn conditional_expr(&mut self, condition: Box<Expression>) -> bool {
+        self.eval_expr(Box::leak(condition).clone())
+            .expect_const()
+            .map(|c| c.truthy())
+            .unwrap_or(/* TODO: FAIL STATE GOES HERE */ false)
+    }
+
+    fn get_const(&mut self, ident: &Identifier) -> Const {
+        self.get_var(ident)
+            .unwrap_or_else(|| panic!("{} not defined!", ident))
+            .expect_const()
+            .unwrap_or_else(|| panic!("attempted to get the const value of a non value identifier {} (this should be impossible)", ident))
     }
 
     pub fn eval_expr(&mut self, expr: Expression) -> Expression {
@@ -302,16 +327,24 @@ impl Interpreter {
                     self.add_var(ident, Some(&value));
                     return value;
                 }
-                _ => panic!("assign lhs not ident"),
+                _ => panic!("Cannot assign to non ident"),
             },
             Expression::AssignOr { lhs, rhs } => self.assign_and(lhs, rhs, Expression::or),
             Expression::AssignXor { lhs, rhs } => self.assign_and(lhs, rhs, Expression::xor),
             Expression::AssignAnd { lhs, rhs } => self.assign_and(lhs, rhs, Expression::and),
-            Expression::AssignShiftLeft { lhs, rhs } => self.assign_and(lhs, rhs, Expression::shift_left),
-            Expression::AssignShiftRight { lhs, rhs } => self.assign_and(lhs, rhs, Expression::shift_right),
+            Expression::AssignShiftLeft { lhs, rhs } => {
+                self.assign_and(lhs, rhs, Expression::shift_left)
+            }
+            Expression::AssignShiftRight { lhs, rhs } => {
+                self.assign_and(lhs, rhs, Expression::shift_right)
+            }
             Expression::AssignAdd { lhs, rhs } => self.assign_and(lhs, rhs, Expression::add),
-            Expression::AssignSubtract { lhs, rhs } => self.assign_and(lhs, rhs, Expression::subtract),
-            Expression::AssignMultiply { lhs, rhs } => self.assign_and(lhs, rhs, Expression::multiply),
+            Expression::AssignSubtract { lhs, rhs } => {
+                self.assign_and(lhs, rhs, Expression::subtract)
+            }
+            Expression::AssignMultiply { lhs, rhs } => {
+                self.assign_and(lhs, rhs, Expression::multiply)
+            }
             Expression::AssignDivide { lhs, rhs } => self.assign_and(lhs, rhs, Expression::divide),
             Expression::AssignModulo { lhs, rhs } => self.assign_and(lhs, rhs, Expression::modulo),
             Expression::Equal { lhs, rhs } => self.comparison(lhs, rhs, Expression::eq),
@@ -335,12 +368,7 @@ impl Interpreter {
             Expression::UnaryPlus { rhs } => self.eval_expr(Box::leak(rhs).clone()),
             Expression::UnaryMinus { rhs } => self.unary_operation(rhs, Const::negate),
             Expression::Ternary { condition, yes, no } => {
-                if self
-                    .eval_expr(Box::leak(condition).clone())
-                    .expect_const()
-                    .map(|c| c.truthy())
-                    .unwrap_or(/* TODO: FAIL STATE GOES HERE */ false)
-                {
+                if self.conditional_expr(condition) {
                     self.eval_expr(Box::leak(yes).clone())
                 } else {
                     self.eval_expr(Box::leak(no).clone())
@@ -348,73 +376,53 @@ impl Interpreter {
             }
             Expression::PreIncrement { rhs } => match Box::leak(rhs) {
                 Expression::Identifier(ident) => {
-                    let value = Expression::Constant(
-                        self.get_var(ident)
-                            .expect("Cannot increment value what doesnt exist lol")
-                            .expect_const()
-                            .unwrap_or_else(|| panic!("need consts"))
-                            .inc(),
-                    );
+                    let value = Expression::Constant(self.get_const(ident).inc());
                     self.add_var(ident, Some(&value));
 
                     value
                 }
                 Expression::Constant(c) => Expression::Constant(c.inc()),
-                _ => panic!("Cannot inc :/"),
+                _ => panic!("Cannot increment non identifier/constant value"),
             },
             Expression::PreDecrement { rhs } => match Box::leak(rhs) {
                 Expression::Identifier(ident) => {
-                    let value = Expression::Constant(
-                        self.get_var(ident)
-                            .expect("Cannot decrement value what doesnt exist lol")
-                            .expect_const()
-                            .unwrap_or_else(|| panic!("need consts"))
-                            .dec(),
-                    );
+                    let value = Expression::Constant(self.get_const(ident).dec());
                     self.add_var(ident, Some(&value));
 
                     value
                 }
                 Expression::Constant(c) => Expression::Constant(c.dec()),
-                _ => panic!("Cannot dec :/"),
+                _ => panic!("Cannot decrement non identifier/constant value"),
             },
             Expression::PostIncrement { lhs } => match Box::leak(lhs) {
                 Expression::Identifier(ident) => {
-                    let value = self
-                        .get_var(ident)
-                        .expect("Cannot increment value what doesnt exist lol")
-                        .expect_const()
-                        .unwrap_or_else(|| panic!("need consts"));
+                    let value = self.get_const(ident);
                     self.add_var(ident, Some(&Expression::Constant(value.inc())));
 
                     Expression::Constant(value)
                 }
                 Expression::Constant(c) => Expression::Constant(c.inc()),
-                _ => panic!("Cannot inc :/"),
+                _ => panic!("Cannot increment non identifier/constant value"),
             },
             Expression::PostDecrement { lhs } => match Box::leak(lhs) {
                 Expression::Identifier(ident) => {
-                    let value = self
-                        .get_var(ident)
-                        .expect("Cannot decrement value what doesnt exist lol")
-                        .expect_const()
-                        .unwrap_or_else(|| panic!("need consts"));
+                    let value = self.get_const(ident);
                     self.add_var(ident, Some(&Expression::Constant(value.dec())));
 
                     Expression::Constant(value)
                 }
                 Expression::Constant(c) => Expression::Constant(c.dec()),
-                _ => panic!("Cannot dec :/"),
+                _ => panic!("Cannot decrement non identifier/constant value"),
             },
             Expression::VectorIndex { vector, index } => {
                 let vector = self
                     .eval_expr(Box::leak(vector).clone())
                     .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
+                    .unwrap_or_else(|| panic!("Cannot index non vector object"));
                 let index = self
                     .eval_expr(Box::leak(index).clone())
                     .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
+                    .unwrap_or_else(|| panic!("Cannot index vector with non constant value"));
                 Box::leak(vector.index(index)).clone()
             }
             Expression::Constant(v) => match v {
@@ -428,7 +436,7 @@ impl Interpreter {
             },
             Expression::Identifier(i) => self
                 .get_var(&i)
-                .expect(format!("{} is not defined", i).as_str()),
+                .unwrap_or_else(|| panic!("{} is not defined", i)),
             Expression::FunctionCall { ident, args } => self.call_function(&ident, args),
         }
     }
@@ -460,12 +468,7 @@ impl Interpreter {
                 None
             }
             Statement::Conditional { condition, body, e } => {
-                if self
-                    .eval_expr(condition)
-                    .expect_const()
-                    .expect("Condition is not a value i can test, dummy")
-                    .truthy()
-                {
+                if self.conditional_expr(Box::new(condition)) {
                     self.eval_stmt(Box::leak(body).clone())
                 } else if let Some(e) = e {
                     self.eval_stmt(Box::leak(e).clone())
@@ -475,12 +478,8 @@ impl Interpreter {
             }
             Statement::Loop { condition, body } => {
                 let body = Box::leak(body).clone();
-                while self
-                    .eval_expr(condition.clone())
-                    .expect_const()
-                    .map(|c| c.truthy())
-                    .unwrap_or_default()
-                {
+                let condition = Box::new(condition);
+                while self.conditional_expr(condition.clone()) {
                     if let Some(return_value) = self.eval_stmt(body.clone()) {
                         return Some(return_value);
                     }
@@ -496,11 +495,14 @@ impl Interpreter {
             Statement::Goto(ident) => unimplemented!(),
 
             Statement::FunctionDefinition { ident, args, body } => {
-                self.global_scope().add_func(ident, Function {
-                    args,
-                    body: Box::leak(body).clone(),
-                    builtin: None,
-                });
+                self.global_scope().add_func(
+                    ident,
+                    Function {
+                        args,
+                        body: Box::leak(body).clone(),
+                        builtin: None,
+                    },
+                );
                 None
             }
             Statement::GlobalDefinition {
@@ -547,5 +549,20 @@ impl Interpreter {
         );
 
         Ok(())
+    }
+
+    pub fn interpret_string<S: ToString>(mut self, s: S) -> i64 {
+        let ast = Parser::new().parse(&s.to_string()).unwrap();
+        self.eval(ast);
+
+        let result = self.call_main();
+
+        match result {
+            Const::Integer(i) => i,
+            other => {
+                println!("Result: {:?}", other);
+                return 0;
+            }
+        }
     }
 }
