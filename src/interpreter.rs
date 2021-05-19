@@ -28,7 +28,8 @@ impl Function {
         let mut func = Self::Builtin();
 
         func.builtin = Some(|args| {
-            args.iter().for_each(|expr| println!("{}", expr.expect_const().unwrap()));
+            args.iter()
+                .for_each(|expr| println!("{}", expr.expect_const().unwrap()));
             return Expression::Constant(Const::Integer(0));
         });
 
@@ -50,13 +51,7 @@ impl Function {
                 };
 
                 while (s.contains("{}")) {
-                    s = s.replacen(
-                        "{}",
-                        args.remove(0)
-                            .to_string()
-                            .as_str(),
-                        1,
-                    );
+                    s = s.replacen("{}", args.remove(0).to_string().as_str(), 1);
                 }
 
                 return Expression::Constant(Const::String(s));
@@ -232,6 +227,73 @@ impl Interpreter {
         self.global_scope().get_func(ident).cloned()
     }
 
+    fn binary_operation(
+        &mut self,
+        lhs: Box<Expression>,
+        rhs: Box<Expression>,
+        operation_function: fn(&Const, &Const) -> Const,
+    ) -> Expression {
+        let lhs = self
+            .eval_expr(Box::leak(lhs).clone())
+            .expect_const()
+            .unwrap_or_else(|| panic!("need consts"));
+
+        let rhs = self
+            .eval_expr(Box::leak(rhs).clone())
+            .expect_const()
+            .unwrap_or_else(|| panic!("need consts"));
+
+        Expression::Constant(operation_function(&lhs, &rhs))
+    }
+
+    fn unary_operation(
+        &mut self,
+        rhs: Box<Expression>,
+        operation_function: fn(&Const) -> Const,
+    ) -> Expression {
+        let rhs = self
+            .eval_expr(Box::leak(rhs).clone())
+            .expect_const()
+            .unwrap_or_else(|| panic!("need consts"));
+
+        Expression::Constant(operation_function(&rhs))
+    }
+
+    fn comparison(
+        &mut self,
+        lhs: Box<Expression>,
+        rhs: Box<Expression>,
+        comparison_function: fn(&Expression, &Expression) -> bool,
+    ) -> Expression {
+        if comparison_function(
+            &self.eval_expr(Box::leak(lhs).clone()),
+            &self.eval_expr(Box::leak(rhs).clone()),
+        ) {
+            Expression::Constant(Const::Integer(1))
+        } else {
+            Expression::Constant(Const::Integer(0))
+        }
+    }
+
+    fn assign_and(&mut self, lhs: Box<Expression>, rhs: Box<Expression>, constructor: fn(Box<Expression>, Box<Expression>) -> Expression) -> Expression {
+        match Box::leak(lhs) {
+            Expression::Identifier(ident) => {
+                let value = self.eval_expr(Box::leak(rhs).clone());
+                let current_value = self
+                    .get_var(ident)
+                    .expect(&format!("'{}' is not defined", ident));
+                let value = self.eval_expr(constructor(
+                    Box::new(current_value.clone()),
+                    Box::new(value.clone()),
+                ));
+
+                self.add_var(ident, Some(&value));
+                return value;
+            }
+            _ => panic!("assign lhs not ident"),
+        }
+    }
+
     pub fn eval_expr(&mut self, expr: Expression) -> Expression {
         match expr {
             Expression::Assign { lhs, rhs } => match Box::leak(lhs) {
@@ -242,166 +304,36 @@ impl Interpreter {
                 }
                 _ => panic!("assign lhs not ident"),
             },
-            Expression::AssignOr { lhs, rhs } => match Box::leak(lhs) {
-                Expression::Identifier(ident) => {
-                    let value = self.eval_expr(Box::leak(rhs).clone());
-                    let current_value = self
-                        .get_var(ident)
-                        .expect(&format!("'{}' is not defined", ident));
-                    let value = self.eval_expr(Expression::Or {
-                        lhs: Box::new(current_value.clone()),
-                        rhs: Box::new(value.clone()),
-                    });
-
-                    self.add_var(ident, Some(&value));
-                    return value;
-                }
-                _ => panic!("assign lhs not ident"),
-            },
-            Expression::AssignXor { lhs, rhs } => match Box::leak(lhs) {
-                Expression::Identifier(ident) => {
-                    let value = self.eval_expr(Box::leak(rhs).clone());
-                    let current_value = self
-                        .get_var(ident)
-                        .expect(&format!("'{}' is not defined", ident));
-                    let value = self.eval_expr(Expression::Xor {
-                        lhs: Box::new(current_value.clone()),
-                        rhs: Box::new(value.clone()),
-                    });
-
-                    self.add_var(ident, Some(&value));
-                    return value;
-                }
-                _ => panic!("assign lhs not ident"),
-            },
-            Expression::AssignAnd { lhs, rhs } => match Box::leak(lhs) {
-                Expression::Identifier(ident) => {
-                    let value = self.eval_expr(Box::leak(rhs).clone());
-                    let current_value = self
-                        .get_var(ident)
-                        .expect(&format!("'{}' is not defined", ident));
-                    let value = self.eval_expr(Expression::And {
-                        lhs: Box::new(current_value.clone()),
-                        rhs: Box::new(value.clone()),
-                    });
-
-                    self.add_var(ident, Some(&value));
-                    return value;
-                }
-                _ => panic!("assign lhs not ident"),
-            },
-            Expression::AssignShiftLeft { lhs, rhs } => match Box::leak(lhs) {
-                Expression::Identifier(ident) => {
-                    let value = self.eval_expr(Box::leak(rhs).clone());
-                    let current_value = self
-                        .get_var(ident)
-                        .expect(&format!("'{}' is not defined", ident));
-                    let value = self.eval_expr(Expression::ShiftLeft {
-                        lhs: Box::new(current_value.clone()),
-                        rhs: Box::new(value.clone()),
-                    });
-
-                    self.add_var(ident, Some(&value));
-                    return value;
-                }
-                _ => panic!("assign lhs not ident"),
-            },
-            Expression::AssignShiftRight { lhs, rhs } => match Box::leak(lhs) {
-                Expression::Identifier(ident) => {
-                    let value = self.eval_expr(Box::leak(rhs).clone());
-                    let current_value = self
-                        .get_var(ident)
-                        .expect(&format!("'{}' is not defined", ident));
-                    let value = self.eval_expr(Expression::ShiftRight {
-                        lhs: Box::new(current_value.clone()),
-                        rhs: Box::new(value.clone()),
-                    });
-
-                    self.add_var(ident, Some(&value));
-                    return value;
-                }
-                _ => panic!("assign lhs not ident"),
-            },
-            Expression::AssignAdd { lhs, rhs } => match Box::leak(lhs) {
-                Expression::Identifier(ident) => {
-                    let value = self.eval_expr(Box::leak(rhs).clone());
-                    let current_value = self
-                        .get_var(ident)
-                        .expect(&format!("'{}' is not defined", ident));
-                    let value = self.eval_expr(Expression::Add {
-                        lhs: Box::new(current_value.clone()),
-                        rhs: Box::new(value.clone()),
-                    });
-
-                    self.add_var(ident, Some(&value));
-                    return value;
-                }
-                _ => panic!("assign lhs not ident"),
-            },
-            Expression::AssignSubtract { lhs, rhs } => match Box::leak(lhs) {
-                Expression::Identifier(ident) => {
-                    let value = self.eval_expr(Box::leak(rhs).clone());
-                    let current_value = self
-                        .get_var(ident)
-                        .expect(&format!("'{}' is not defined", ident));
-                    let value = self.eval_expr(Expression::Subtract {
-                        lhs: Box::new(current_value.clone()),
-                        rhs: Box::new(value.clone()),
-                    });
-
-                    self.add_var(ident, Some(&value));
-                    return value;
-                }
-                _ => panic!("assign lhs not ident"),
-            },
-            Expression::AssignMultiply { lhs, rhs } => match Box::leak(lhs) {
-                Expression::Identifier(ident) => {
-                    let value = self.eval_expr(Box::leak(rhs).clone());
-                    let current_value = self
-                        .get_var(ident)
-                        .expect(&format!("'{}' is not defined", ident));
-                    let value = self.eval_expr(Expression::Multiply {
-                        lhs: Box::new(current_value.clone()),
-                        rhs: Box::new(value.clone()),
-                    });
-
-                    self.add_var(ident, Some(&value));
-                    return value;
-                }
-                _ => panic!("assign lhs not ident"),
-            },
-            Expression::AssignDivide { lhs, rhs } => match Box::leak(lhs) {
-                Expression::Identifier(ident) => {
-                    let value = self.eval_expr(Box::leak(rhs).clone());
-                    let current_value = self
-                        .get_var(ident)
-                        .expect(&format!("'{}' is not defined", ident));
-                    let value = self.eval_expr(Expression::Divide {
-                        lhs: Box::new(current_value.clone()),
-                        rhs: Box::new(value.clone()),
-                    });
-
-                    self.add_var(ident, Some(&value));
-                    return value;
-                }
-                _ => panic!("assign lhs not ident"),
-            },
-            Expression::AssignModulo { lhs, rhs } => match Box::leak(lhs) {
-                Expression::Identifier(ident) => {
-                    let value = self.eval_expr(Box::leak(rhs).clone());
-                    let current_value = self
-                        .get_var(ident)
-                        .expect(&format!("'{}' is not defined", ident));
-                    let value = self.eval_expr(Expression::Modulo {
-                        lhs: Box::new(current_value.clone()),
-                        rhs: Box::new(value.clone()),
-                    });
-
-                    self.add_var(ident, Some(&value));
-                    return value;
-                }
-                _ => panic!("assign lhs not ident"),
-            },
+            Expression::AssignOr { lhs, rhs } => self.assign_and(lhs, rhs, Expression::or),
+            Expression::AssignXor { lhs, rhs } => self.assign_and(lhs, rhs, Expression::xor),
+            Expression::AssignAnd { lhs, rhs } => self.assign_and(lhs, rhs, Expression::and),
+            Expression::AssignShiftLeft { lhs, rhs } => self.assign_and(lhs, rhs, Expression::shift_left),
+            Expression::AssignShiftRight { lhs, rhs } => self.assign_and(lhs, rhs, Expression::shift_right),
+            Expression::AssignAdd { lhs, rhs } => self.assign_and(lhs, rhs, Expression::add),
+            Expression::AssignSubtract { lhs, rhs } => self.assign_and(lhs, rhs, Expression::subtract),
+            Expression::AssignMultiply { lhs, rhs } => self.assign_and(lhs, rhs, Expression::multiply),
+            Expression::AssignDivide { lhs, rhs } => self.assign_and(lhs, rhs, Expression::divide),
+            Expression::AssignModulo { lhs, rhs } => self.assign_and(lhs, rhs, Expression::modulo),
+            Expression::Equal { lhs, rhs } => self.comparison(lhs, rhs, Expression::eq),
+            Expression::NotEqual { lhs, rhs } => self.comparison(lhs, rhs, Expression::ne),
+            Expression::Less { lhs, rhs } => self.comparison(lhs, rhs, Expression::lt),
+            Expression::More { lhs, rhs } => self.comparison(lhs, rhs, Expression::gt),
+            Expression::LessEqual { lhs, rhs } => self.comparison(lhs, rhs, Expression::le),
+            Expression::MoreEqual { lhs, rhs } => self.comparison(lhs, rhs, Expression::ge),
+            Expression::Or { lhs, rhs } => self.binary_operation(lhs, rhs, Const::or),
+            Expression::Xor { lhs, rhs } => self.binary_operation(lhs, rhs, Const::xor),
+            Expression::And { lhs, rhs } => self.binary_operation(lhs, rhs, Const::and),
+            Expression::ShiftLeft { lhs, rhs } => self.binary_operation(lhs, rhs, Const::shl),
+            Expression::ShiftRight { lhs, rhs } => self.binary_operation(lhs, rhs, Const::shr),
+            Expression::Add { lhs, rhs } => self.binary_operation(lhs, rhs, Const::add),
+            Expression::Subtract { lhs, rhs } => self.binary_operation(lhs, rhs, Const::sub),
+            Expression::Multiply { lhs, rhs } => self.binary_operation(lhs, rhs, Const::mul),
+            Expression::Divide { lhs, rhs } => self.binary_operation(lhs, rhs, Const::div),
+            Expression::Modulo { lhs, rhs } => self.binary_operation(lhs, rhs, Const::modulo),
+            Expression::Not { rhs } => self.unary_operation(rhs, Const::not),
+            Expression::Complement { rhs } => self.unary_operation(rhs, Const::complement),
+            Expression::UnaryPlus { rhs } => self.eval_expr(Box::leak(rhs).clone()),
+            Expression::UnaryMinus { rhs } => self.unary_operation(rhs, Const::negate),
             Expression::Ternary { condition, yes, no } => {
                 if self
                     .eval_expr(Box::leak(condition).clone())
@@ -413,193 +345,6 @@ impl Interpreter {
                 } else {
                     self.eval_expr(Box::leak(no).clone())
                 }
-            }
-            Expression::Equal { lhs, rhs } => {
-                if self.eval_expr(Box::leak(lhs).clone()) == self.eval_expr(Box::leak(rhs).clone())
-                {
-                    Expression::Constant(Const::Integer(1))
-                } else {
-                    Expression::Constant(Const::Integer(0))
-                }
-            }
-            Expression::NotEqual { lhs, rhs } => {
-                if self.eval_expr(Box::leak(lhs).clone()) == self.eval_expr(Box::leak(rhs).clone())
-                {
-                    Expression::Constant(Const::Integer(0))
-                } else {
-                    Expression::Constant(Const::Integer(1))
-                }
-            }
-            Expression::Less { lhs, rhs } => {
-                if self.eval_expr(Box::leak(lhs).clone()) < self.eval_expr(Box::leak(rhs).clone()) {
-                    Expression::Constant(Const::Integer(1))
-                } else {
-                    Expression::Constant(Const::Integer(0))
-                }
-            }
-            Expression::More { lhs, rhs } => {
-                if self.eval_expr(Box::leak(lhs).clone()) > self.eval_expr(Box::leak(rhs).clone()) {
-                    Expression::Constant(Const::Integer(1))
-                } else {
-                    Expression::Constant(Const::Integer(0))
-                }
-            }
-            Expression::LessEqual { lhs, rhs } => {
-                if self.eval_expr(Box::leak(lhs).clone()) <= self.eval_expr(Box::leak(rhs).clone())
-                {
-                    Expression::Constant(Const::Integer(1))
-                } else {
-                    Expression::Constant(Const::Integer(0))
-                }
-            }
-            Expression::MoreEqual { lhs, rhs } => {
-                if self.eval_expr(Box::leak(lhs).clone()) >= self.eval_expr(Box::leak(rhs).clone())
-                {
-                    Expression::Constant(Const::Integer(1))
-                } else {
-                    Expression::Constant(Const::Integer(0))
-                }
-            }
-            Expression::Or { lhs, rhs } => {
-                let lhs = self
-                    .eval_expr(Box::leak(lhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-
-                Expression::Constant(lhs.or(&rhs))
-            }
-            Expression::Xor { lhs, rhs } => {
-                let lhs = self
-                    .eval_expr(Box::leak(lhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-
-                Expression::Constant(lhs.xor(&rhs))
-            }
-            Expression::And { lhs, rhs } => {
-                let lhs = self
-                    .eval_expr(Box::leak(lhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-
-                Expression::Constant(lhs.and(&rhs))
-            }
-            Expression::ShiftLeft { lhs, rhs } => {
-                let lhs = self
-                    .eval_expr(Box::leak(lhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-
-                Expression::Constant(lhs.shl(&rhs))
-            }
-            Expression::ShiftRight { lhs, rhs } => {
-                let lhs = self
-                    .eval_expr(Box::leak(lhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-
-                Expression::Constant(lhs.shr(&rhs))
-            }
-            Expression::Add { lhs, rhs } => {
-                let lhs = self
-                    .eval_expr(Box::leak(lhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                Expression::Constant(lhs.add(&rhs))
-            }
-            Expression::Subtract { lhs, rhs } => {
-                let lhs = self
-                    .eval_expr(Box::leak(lhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                Expression::Constant(lhs.sub(&rhs))
-            }
-            Expression::Multiply { lhs, rhs } => {
-                let lhs = self
-                    .eval_expr(Box::leak(lhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                Expression::Constant(lhs.mul(&rhs))
-            }
-            Expression::Divide { lhs, rhs } => {
-                let lhs = self
-                    .eval_expr(Box::leak(lhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                Expression::Constant(lhs.div(&rhs))
-            }
-            Expression::Modulo { lhs, rhs } => {
-                let lhs = self
-                    .eval_expr(Box::leak(lhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-                Expression::Constant(lhs.modulo(&rhs))
-            }
-            Expression::Not { rhs } => {
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-
-                Expression::Constant(Const::Integer((!rhs.truthy()) as i64))
-            }
-            Expression::Complement { rhs } => {
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-
-                Expression::Constant(rhs.complement())
-            }
-            Expression::UnaryPlus { rhs } => self.eval_expr(Box::leak(rhs).clone()),
-            Expression::UnaryMinus { rhs } => {
-                let rhs = self
-                    .eval_expr(Box::leak(rhs).clone())
-                    .expect_const()
-                    .unwrap_or_else(|| panic!("need consts"));
-
-                Expression::Constant(rhs.negate())
             }
             Expression::PreIncrement { rhs } => match Box::leak(rhs) {
                 Expression::Identifier(ident) => {
@@ -675,11 +420,15 @@ impl Interpreter {
             Expression::Constant(v) => match v {
                 Const::Vector(v) => Expression::Constant(Const::Vector(
                     v.into_iter()
-                        .map(|expr| self.eval_expr(Box::leak(expr).clone())).map(Box::new).collect(),
+                        .map(|expr| self.eval_expr(Box::leak(expr).clone()))
+                        .map(Box::new)
+                        .collect(),
                 )),
                 _ => Expression::Constant(v),
             },
-            Expression::Identifier(i) => self.get_var(&i).expect(format!("{} is not defined", i).as_str()),
+            Expression::Identifier(i) => self
+                .get_var(&i)
+                .expect(format!("{} is not defined", i).as_str()),
             Expression::FunctionCall { ident, args } => self.call_function(&ident, args),
         }
     }
@@ -726,11 +475,11 @@ impl Interpreter {
             }
             Statement::Loop { condition, body } => {
                 let body = Box::leak(body).clone();
-                while (self
+                while self
                     .eval_expr(condition.clone())
                     .expect_const()
                     .map(|c| c.truthy())
-                    .unwrap_or_default())
+                    .unwrap_or_default()
                 {
                     if let Some(return_value) = self.eval_stmt(body.clone()) {
                         return Some(return_value);
@@ -747,13 +496,11 @@ impl Interpreter {
             Statement::Goto(ident) => unimplemented!(),
 
             Statement::FunctionDefinition { ident, args, body } => {
-                let f = Function {
+                self.global_scope().add_func(ident, Function {
                     args,
                     body: Box::leak(body).clone(),
                     builtin: None,
-                };
-
-                self.global_scope().add_func(ident, f);
+                });
                 None
             }
             Statement::GlobalDefinition {

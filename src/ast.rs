@@ -104,6 +104,9 @@ impl Const {
             (lhs, rhs) => Self::Integer((lhs.truthy() as i64) % (rhs.truthy() as i64)),
         }
     }
+    pub fn not(&self) -> Self {
+        Const::Integer((!self.truthy()) as i64)
+    }
     pub fn complement(&self) -> Self {
         match self {
             Self::Integer(i) => Self::Integer(!i),
